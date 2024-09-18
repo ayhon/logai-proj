@@ -1,0 +1,17 @@
+(ocamllex (modules lexerDimacs))
+
+(menhir
+	 (flags (--explain --table --external-tokens TokensDimacs))
+	 (modules parserDimacs)
+)
+
+(menhir
+	 (flags (--only-tokens))
+	 (modules tokensDimacs)
+)
+
+(executable
+	(name main)
+	(public_name dpll)
+	(libraries menhirLib)
+	(package dpll))
