@@ -4,7 +4,7 @@ type var = int
 (** We use the same type for litterals except we use negatives values. *)
 type lit = int
 
-(** Contains litterals that satisfy a cnf formula as returned by a SAT solver. *)
+(** Contains literals that satisfy a cnf formula as returned by a SAT solver. *)
 type model = int list
 
 (** A set of variables *)
