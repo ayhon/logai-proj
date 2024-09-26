@@ -111,7 +111,7 @@ module CDCL: Dpll.SOLVER = struct
   let cdcl(info: Ast.t): model option =
     (* IDEA: Instead of keeping a dl and dstack, can't we use
              the runtime's stack through recursion? If we don't
-             mutate the model, but updated inmutably, we can
+             mutate the model, but update it inmutably, we can
              simply store it in the stack.contents
              We would need to rethink how to implement the
              [analyze_conflict] step though.
