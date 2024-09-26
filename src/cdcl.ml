@@ -121,12 +121,10 @@ module CDCL: Dpll.SOLVER = struct
     in
     let (m, lit_deps) = unit_propagation info.cnf LitMap.empty in
     let g: graph = Array.make info.nb_var Ast.Clause.empty  in
-    let g = lit_deps
-      |> List.fold_left (fun g (lit, deps) ->
+    lit_deps
+      |> List.iter (fun (lit, deps) ->
         g.(abs lit) <- Ast.Clause.union deps g.(abs lit);
-        g
-      ) g
-    in
+      );
     inner_cdcl info.cnf m g
 
   let solve(info: Ast.t): Ast.model option =
