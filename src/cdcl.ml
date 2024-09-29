@@ -12,33 +12,29 @@ module CDCL: Dpll.SOLVER = struct
       minus the unassigned node itself. *)
   type graph = (Ast.Clause.t) array
 
-  module LitMap = Map.Make(struct
-    type t = Ast.lit
-    let compare = compare
-  end)
-  type model = bool LitMap.t
+  type model = LitSet.t
   let get_assignment(lit: Ast.lit)(m: model): bool option =
-    LitMap.find_opt (abs lit) m
+    LitSet.find_opt lit m
+    |> Option.map (fun lit -> lit > 0)
 
   let rec collect: ('a option) list -> 'a list = function
     | [] -> []
     | (Some x)::xs -> x :: collect xs
     | None::xs -> collect xs
 
-  let rec unit_propagation(f: Ast.Cnf.t)(m: model): model* ((Ast.lit * Ast.Clause.t) list) =
-    (* TODO: Should also extend the implication graph.
-       IDEA: Return also the literals which were assigned through
+  let rec unit_propagation(f: Ast.Cnf.t)(m: model): model * ((Ast.lit * Ast.Clause.t) list) =
+    (*  IDEA: Return also the literals which were assigned through
              unit propagation. *)
-    let rec inner acc m =
-      let unassigned_lit_and_deps clause =
-        let unassigned_lits = clause
-          |> Ast.Clause.filter  (fun lit -> get_assignment lit m == None)
-          |> Ast.Clause.elements
-        in
-        match unassigned_lits with
-        | [x] -> Some (x, Ast.Clause.remove x clause)
-        | _ -> None
+    let unassigned_lit_and_deps clause =
+      let unassigned_lits = clause
+        |> Ast.Clause.filter  (fun lit -> get_assignment lit m == None)
+        |> Ast.Clause.elements
       in
+      match unassigned_lits with
+      | [x] -> Some (x, Ast.Clause.remove x clause)
+      | _ -> None
+    in
+    let rec inner acc m =
       let literals_to_propagate = f
         |> Ast.Cnf.elements
         |> List.map unassigned_lit_and_deps
@@ -48,14 +44,11 @@ module CDCL: Dpll.SOLVER = struct
         (m, acc)
       else
         literals_to_propagate
-          |> List.map (fun (i,_) -> (abs i, if i > 0 then true else false))
-          |> LitMap.of_list
-          |> LitMap.union (fun _ _ _ ->
-              failwith "We're supposed to be parsing unassinged literals. There can't be a conflict where this function is used."
-            ) m
+          |> List.map (fun (i,_) -> i)
+          |> LitSet.of_list
+          |> LitSet.union m
           |> inner (literals_to_propagate @ acc)
-    in
-    inner [] m
+    in inner [] m
 
   let assignments(m: model)(f: Ast.Cnf.t): ((bool option) list) list =
     f |> Ast.Cnf.elements
@@ -74,13 +67,13 @@ module CDCL: Dpll.SOLVER = struct
       else
         None
     in
-    let conjunctions = f
+    let disjunctions = f
       |> assignments m
       |> List.map (satisfies_clause m)
     in
-    if  List.exists (fun clause -> clause == Some true) conjunctions then
+    if List.for_all (fun clause -> clause == Some true) disjunctions then
       Some true
-    else if List.for_all (fun clause -> clause == Some false) conjunctions then
+    else if List.exists (fun clause -> clause == Some false) disjunctions then
       Some false
     else
       None
@@ -90,10 +83,10 @@ module CDCL: Dpll.SOLVER = struct
   let analyze_conflict(conflict: Ast.Clause.t)(m: model)(g: graph): LitSet.t =
     let rec get_minimal_node node =
       let neighbours = g.(node) in
-      if LitSet.is_empty neighbours then
+      if Ast.Clause.is_empty neighbours then
         LitSet.singleton node
       else
-        LitSet.fold (fun neigh acc  ->
+        Ast.Clause.fold (fun neigh acc  ->
             get_minimal_node neigh
             |> LitSet.union acc
           )  neighbours LitSet.empty
@@ -116,21 +109,26 @@ module CDCL: Dpll.SOLVER = struct
              We would need to rethink how to implement the
              [analyze_conflict] step though.
        TODO: Decide whether it's worth it *)
-    let inner_cdcl(f: Ast.Cnf.t)(m: model)(g: graph): model option =
-      failwith "TODO"
+    let rec inner_cdcl(f: Ast.Cnf.t)(m: model)(g: graph): model option =
+      (* BACKTRACKING *)
+      while satisfies_cnf m f == Some false do
+        failwith "TODO"
+      done;
+      (* BOOLEAN DECISION *)
+      if satisfies_cnf m f == None then
+        failwith "TODO"
+      else ();
+      inner_cdcl f m g
     in
-    let (m, lit_deps) = unit_propagation info.cnf LitMap.empty in
+    let (m, lit_deps) = unit_propagation info.cnf LitSet.empty in
     let g: graph = Array.make info.nb_var Ast.Clause.empty  in
-    lit_deps
-      |> List.iter (fun (lit, deps) ->
+    lit_deps |> List.iter (fun (lit, deps) ->
         g.(abs lit) <- Ast.Clause.union deps g.(abs lit);
       );
     inner_cdcl info.cnf m g
 
   let solve(info: Ast.t): Ast.model option =
-    let to_ast_model: model -> Ast.model =
-      failwith "TODO"
-    in
-      cdcl info
-        |> Option.map to_ast_model
+    cdcl info
+      |> Option.map  LitSet.elements
+
 end
