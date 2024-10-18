@@ -1,6 +1,0 @@
-EXCLUDE_QUERY_DIR
-B /home/fthire/.opam/4.04.2/lib/menhirLib
-B ../_build/default/src/.main.eobjs
-S /home/fthire/.opam/4.04.2/lib/menhirLib
-S .
-FLG -w -40
