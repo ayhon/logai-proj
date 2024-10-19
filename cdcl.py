@@ -26,7 +26,8 @@ def neg(l: Lit) -> Lit:
 
 def cnf(*clauses: Iterable[int]) -> Cnf:
     return Cnf(
-        frozenset(Clause(frozenset(Lit(l) for l in clause)) for clause in clauses)
+        frozenset(Clause(frozenset(Lit(l) for l in clause))
+                  for clause in clauses)
     )
 
 
@@ -52,7 +53,7 @@ class Model:
         backtracked decision.
 
         These are needed in order to learn the conflicting clauses. In particular,
-        we have that all(m(l) is False for l in deps), and therefore 
+        we have that all(m(l) is False for l in deps), and therefore
         all(m(l) is False for l in deps) ==> m(lit) is True
         """
 
@@ -199,10 +200,10 @@ def unit_propagation(f: Cnf, m: Model, fuel: int = DEFAULT_RECURSION_FUEL) -> Mo
         undecided_clauses = [
             clause
             for clause in f
-            if all(m(l) != True for l in clause) and any(m(l) == None for l in clause)
+            if not all(m(l) for l in clause) and any(m(l) is None for l in clause)
         ]
         unassigned_per_clause = [
-            [l for l in clause if m(l) == None] for clause in undecided_clauses
+            [l for l in clause if m(l) is None] for clause in undecided_clauses
         ]
         can_propagate = {
             unassigned[0]: clause - {unassigned[0]}
