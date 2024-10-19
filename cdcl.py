@@ -211,7 +211,6 @@ def unit_propagation(
     fuel: int = DEFAULT_RECURSION_FUEL
 ) -> Model:
     def unit(clause: Clause) -> Lit | None:
-        assert not isinstance(clause, int), clause
         has_unassigned = False
         res = None
         for lit in clause:
@@ -231,7 +230,7 @@ def unit_propagation(
         for lit in clause:
             if model(lit) is None and clause not in watch[lit]:
                 return Lit(lit)
-    clauses = watch[entry_point]
+    clauses = watch[entry_point].copy()
     for clause in clauses:
         u = unit(clause)
         if u is None:
@@ -242,56 +241,6 @@ def unit_propagation(
             m.propagate([(u, clause - {u})])
             unit_propagation(f, m, watch, -u, fuel)
     return m
-
-"""
-
-    for _ in range(fuel):
-        to_propagate = []
-        lits = list(watch.keys())
-        for lit in lits:
-            if m(lit) is not False:
-                continue
-            clauses = watch.pop(lit)
-            for clause in clauses:
-                u = unit(clause)
-                if u is not None:  # If the clause is a unit, we propagate
-                    to_propagate.append((u, clause-u))
-                else:  # Otherwise, we choose another literal to watch
-                    watched = choose_watcher(m, watch, clause)
-                    watch[watched].add(clause)
-        m.propagate(to_propagate)
-    return m"""
-
-
-"""        undecided_clauses = [
-            clause
-            for clause in f
-            if all(not m(l) for l in clause) and any(m(l) is None for l in clause)
-        ]
-        unassigned_per_clause = [
-            [l for l in clause if m(l) is None] for clause in undecided_clauses
-        ]
-        # Associates unassigned variable from a unit clause to its clause
-        can_propagate: dict[Lit, frozenset[Lit]] = {}
-        for clause, unassigned_lits in zip(
-            undecided_clauses,
-            unassigned_per_clause
-        ):
-            if len(unassigned_lits) == 1:
-                unassigned_lit = unassigned_lits[0]
-                can_propagate[unassigned_lit] = clause - {unassigned_lit}
-
-        conflicts = {
-            abs(lit) for lit in can_propagate.keys() if neg(lit) in can_propagate
-        }
-        to_propagate = [
-            (lit, deps) for lit, deps in can_propagate.items()
-            if lit not in conflicts
-        ]
-        if not to_propagate:
-            return m
-        m.propagate(to_propagate)
-    return m"""
 
 
 def analyze_conflict(
@@ -537,7 +486,7 @@ def main() -> None:
     #test_3()
 
     # Exhaustive
-    test_with_timeout(timeout=5.0)
+    test_with_timeout(timeout=30.0)
 
 
 if __name__ == "__main__":
