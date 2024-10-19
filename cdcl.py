@@ -8,6 +8,7 @@ from typing import (
     Sequence,
     Self,
 )
+from collections import defaultdict
 from pathlib import Path
 from multiprocessing import Process
 
@@ -205,23 +206,81 @@ def fixpoint(
 def unit_propagation(
     f: Cnf,
     m: Model,
+    watch: dict[Lit, set[Clause]],
+    entry_point: Lit,
     fuel: int = DEFAULT_RECURSION_FUEL
 ) -> Model:
+    def unit(clause: Clause) -> Lit | None:
+        assert not isinstance(clause, int), clause
+        has_unassigned = False
+        res = None
+        for lit in clause:
+            if m(lit) is not None:
+                continue
+            if has_unassigned:  # Second unsassigned
+                return None
+            has_unassigned = True
+            res = lit
+        return res
+
+    def choose_watched(model, watch, clause) -> Lit:
+        """
+        Chooses a new literal to watch. We want it to be unassigned,
+        and it must not already be watched.
+        """
+        for lit in clause:
+            if model(lit) is None and clause not in watch[lit]:
+                return Lit(lit)
+    clauses = watch[entry_point]
+    for clause in clauses:
+        u = unit(clause)
+        if u is None:
+            lit = choose_watched(m, watch, clause)
+            watch[lit] |= {clause}
+            watch[u] -= {clause}
+        else:
+            m.propagate([(u, clause - {u})])
+            unit_propagation(f, m, watch, -u, fuel)
+    return m
+
+"""
+
     for _ in range(fuel):
-        undecided_clauses = [
+        to_propagate = []
+        lits = list(watch.keys())
+        for lit in lits:
+            if m(lit) is not False:
+                continue
+            clauses = watch.pop(lit)
+            for clause in clauses:
+                u = unit(clause)
+                if u is not None:  # If the clause is a unit, we propagate
+                    to_propagate.append((u, clause-u))
+                else:  # Otherwise, we choose another literal to watch
+                    watched = choose_watcher(m, watch, clause)
+                    watch[watched].add(clause)
+        m.propagate(to_propagate)
+    return m"""
+
+
+"""        undecided_clauses = [
             clause
             for clause in f
-            if not all(m(l) for l in clause) and any(m(l) is None for l in clause)
+            if all(not m(l) for l in clause) and any(m(l) is None for l in clause)
         ]
         unassigned_per_clause = [
             [l for l in clause if m(l) is None] for clause in undecided_clauses
         ]
-        can_propagate = {
-            unassigned[0]: clause - {unassigned[0]}
-            for clause, unassigned
-            in zip(undecided_clauses, unassigned_per_clause)
-            if len(unassigned) == 1
-        }
+        # Associates unassigned variable from a unit clause to its clause
+        can_propagate: dict[Lit, frozenset[Lit]] = {}
+        for clause, unassigned_lits in zip(
+            undecided_clauses,
+            unassigned_per_clause
+        ):
+            if len(unassigned_lits) == 1:
+                unassigned_lit = unassigned_lits[0]
+                can_propagate[unassigned_lit] = clause - {unassigned_lit}
+
         conflicts = {
             abs(lit) for lit in can_propagate.keys() if neg(lit) in can_propagate
         }
@@ -232,7 +291,7 @@ def unit_propagation(
         if not to_propagate:
             return m
         m.propagate(to_propagate)
-    return m
+    return m"""
 
 
 def analyze_conflict(
@@ -266,7 +325,7 @@ def decide(m: Model, f: Cnf) -> Model:
     # in the end. Do we have a rule to keep track of whether
     # we used 1 or 0 when backtracking?
     lit = next((lit for clause in f for lit in clause if m(lit) is None), None)
-    assert lit is not None, "Can't decide for a model which is already decide"
+    assert lit is not None, "Can't decide for a model which is already decided"
     return m.decide(lit)
 
 
@@ -294,7 +353,19 @@ def nb_vars(f: Cnf) -> int:
 
 
 def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
-    m = unit_propagation(f, Model(), fuel=fuel)
+    m = Model()
+    # Marks "watched" literals to implement their indexing
+    watch: dict[Lit, set[Clause]] = defaultdict(set)
+    for clause in f:
+        try:
+            l1, l2, *_ = clause
+            watch[l1] |= {clause}
+            watch[l2] |= {clause}
+        except ValueError:  # There is only one literal in clause
+            lit, *_ = clause
+            m.propagate([(lit, clause-{lit})])
+            m = unit_propagation(f, m, watch, -lit, fuel=fuel)
+
     for _ in range(fuel):
         while conflict := find_conflict(f, m):
             if VERBOSE:
@@ -307,15 +378,13 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
                 print(f"Learned {show_clause(learned_clause)}")
             f = Cnf(f | {Clause(learned_clause)})
             m.backtrack(kept_literals)
-            m = unit_propagation(f, m, fuel=fuel)
 
         lit = find_undecided_literal(f, m)
         if lit is not None:
             if VERBOSE:
                 print(f"Decided {lit}")
             m.decide(lit)
-            m = decide(m, f)
-            m = unit_propagation(f, m, fuel=fuel)
+            m = unit_propagation(f, m, watch, -lit, fuel=fuel)
         else:
             return m
     raise TimeoutError("Couldn't find satisfiable formula with"
@@ -458,14 +527,14 @@ def main() -> None:
         return
 
     # unit_propagation
-    print("test_1")
-    test_1()
+    #print("test_1")
+    #test_1()
 
     # analyze_conflict
-    print("test_2")
-    test_2()
-    print("test_3")
-    test_3()
+    #print("test_2")
+    #test_2()
+    #print("test_3")
+    #test_3()
 
     # Exhaustive
     test_with_timeout(timeout=5.0)
