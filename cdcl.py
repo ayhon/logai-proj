@@ -70,18 +70,20 @@ class Model:
             Lit(-it.lit): offset + i for i, it in enumerate(items)
         }
 
-    def _rebuild_pos_cache(self) -> None:
-        self._pos_cache.clear()
-        self._extend_pos_cache(self._data, offset=0)
+    def _invalidate_pos_cache(self, keys: Iterable[Lit]) -> None:
+        for key in keys:
+            self._pos_cache.pop(key)
+            self._pos_cache.pop(neg(key))
 
     def _extend_items_cache(self, items: Sequence[Item]) -> None:
         self._items_cache |= {it.lit: (True, it.deps) for it in items} | {
             Lit(-it.lit): (False, it.deps) for it in items
         }
 
-    def _rebuild_items_cache(self) -> None:
-        self._items_cache.clear()
-        self._extend_items_cache(self._data)
+    def _invalidate_items_cache(self, keys: Iterable[Lit]) -> None:
+        for key in keys:
+            self._items_cache.pop(key)
+            self._items_cache.pop(neg(key))
 
     def _extend(self, items: Sequence[Item]) -> "Model":
         n = len(self._data)
@@ -155,9 +157,10 @@ class Model:
     def backtrack(self, size: int) -> "Model":
         """Backtracks until the given choice"""
         assert size >= 0, "Cannot resize to negative value"
+        invalidated_keys = [key for key, _ in self._data[size:]]
+        self._invalidate_pos_cache(invalidated_keys)
+        self._invalidate_items_cache(invalidated_keys)
         self._data = self._data[:size]
-        self._rebuild_pos_cache()
-        self._rebuild_items_cache()
         return self
 
     def weak_eq(self, other: "Model") -> bool:
