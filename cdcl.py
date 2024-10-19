@@ -9,6 +9,7 @@ from typing import (
     Self,
 )
 from pathlib import Path
+from multiprocessing import Process
 
 DEFAULT_RECURSION_FUEL = 1_000_000
 VERBOSE = False
@@ -367,7 +368,7 @@ def read_dimacs(file: Path) -> Cnf:
         )
 
 
-def paths_by_size() -> Iterable[tuple[bool, Path]]:
+def paths_by_size() -> Iterable[tuple[Path, bool]]:
     ok_paths = [*ok_pahts()]
     ko_paths = [*ko_pahts()]
     yield from sorted(
@@ -408,23 +409,21 @@ def test_all(fuel: int = DEFAULT_RECURSION_FUEL) -> None:
 
 
 def test_with_timeout(timeout: float = 5.0) -> None:
-    # WARNING: Not working
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        for path, veredict in paths_by_size():
-            print(path)
-            f = executor.submit(run_test, path, veredict)
-
-            res = f.result()
+    for path, veredict in paths_by_size():
+        print(path)
+        def target() -> None:
+            res = run_test(path, veredict)
             if res is None:
                 print(f"⏰Timed out. {timeout=}s")
             elif res is True:
                 print("✅")
             elif res is False:
                 print("❌")
-
-
+        f = Process(target=target)
+        f.start()
+        f.join(timeout=timeout)
+        if f.exitcode is None:
+            print(f"⏰Timed out. {timeout=}s")
 #### END CDCL TESTING ####
 
 
@@ -448,7 +447,7 @@ def main() -> None:
     test_3()
 
     # Exhaustive
-    test_with_timeout(timeout=30.0)
+    test_with_timeout(timeout=5.0)
 
 
 if __name__ == "__main__":
