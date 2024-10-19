@@ -150,8 +150,14 @@ class Model:
         it = Model.Item(lit=lit, deps=None)
         return self._extend([it])
 
-    def propagate(self, items: Iterable[tuple[Lit, frozenset[Lit]]]) -> "Model":
-        """Adds a new literal assignment, with some dependencies on why this literal was chosen."""
+    def propagate(
+        self,
+        items: Iterable[tuple[Lit, frozenset[Lit]]]
+    ) -> "Model":
+        """
+        Adds a new literal assignment, with some dependencies on why this
+        literal was chosen.
+        """
         propagated = [Model.Item(lit=lit, deps=deps) for lit, deps in items]
         self._extend(propagated)
         return self
@@ -184,7 +190,11 @@ class Model:
 T = TypeVar("T")
 
 
-def fixpoint(f: Callable[[T], T], init: T, fuel: int = DEFAULT_RECURSION_FUEL) -> T:
+def fixpoint(
+    f: Callable[[T], T],
+    init: T,
+    fuel: int = DEFAULT_RECURSION_FUEL
+) -> T:
     x = init
     for _ in range(fuel):
         y = f(x)
@@ -195,7 +205,11 @@ def fixpoint(f: Callable[[T], T], init: T, fuel: int = DEFAULT_RECURSION_FUEL) -
     raise TimeoutError(f"Couldn't find fix point in {fuel} iterations")
 
 
-def unit_propagation(f: Cnf, m: Model, fuel: int = DEFAULT_RECURSION_FUEL) -> Model:
+def unit_propagation(
+    f: Cnf,
+    m: Model,
+    fuel: int = DEFAULT_RECURSION_FUEL
+) -> Model:
     for _ in range(fuel):
         undecided_clauses = [
             clause
@@ -207,14 +221,16 @@ def unit_propagation(f: Cnf, m: Model, fuel: int = DEFAULT_RECURSION_FUEL) -> Mo
         ]
         can_propagate = {
             unassigned[0]: clause - {unassigned[0]}
-            for clause, unassigned in zip(undecided_clauses, unassigned_per_clause)
+            for clause, unassigned
+            in zip(undecided_clauses, unassigned_per_clause)
             if len(unassigned) == 1
         }
         conflicts = {
             abs(lit) for lit in can_propagate.keys() if neg(lit) in can_propagate
         }
         to_propagate = [
-            (lit, deps) for lit, deps in can_propagate.items() if lit not in conflicts
+            (lit, deps) for lit, deps in can_propagate.items()
+            if lit not in conflicts
         ]
         if not to_propagate:
             return m
@@ -241,9 +257,11 @@ def analyze_conflict(
             else:
                 to_process.extend(deps)
     if decided_literals:
-        new_size = max(p for lit in decided_literals if (p := m.pos(lit)) is not None)
+        new_size = max(p for lit in decided_literals
+                       if (p := m.pos(lit)) is not None)
         return new_size, frozenset(decided_literals)
-    # If there are no decided literals, it means we have reached a contradiction
+    # If there are no decided literals, it means we have reached a
+    # contradiction
 
 
 def decide(m: Model, f: Cnf) -> Model:
@@ -256,7 +274,10 @@ def decide(m: Model, f: Cnf) -> Model:
 
 
 def find_conflict(f: Cnf, m: Model) -> Clause | None:
-    return next((clause for clause in f if all(m(l) is False for l in clause)), None)
+    return next(
+        (clause for clause in f if all(m(l) is False for l in clause)),
+        None
+    )
 
 
 def find_undecided_literal(f: Cnf, m: Model) -> Lit | None:
@@ -267,7 +288,7 @@ def find_undecided_literal(f: Cnf, m: Model) -> Lit | None:
             if not any(m(l) is True for l in clause)
             and (lit := next((l for l in clause if m(l) is None), None))
         ),
-        None,
+        None
     )
 
 
@@ -300,7 +321,8 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
             m = unit_propagation(f, m, fuel=fuel)
         else:
             return m
-    raise TimeoutError(f"Couldn't find satisfiable formula with {fuel} iterations")
+    raise TimeoutError("Couldn't find satisfiable formula with"
+                       f"{fuel} iterations")
 
 
 #### END CDCL IMPLEMENTATION ####
@@ -308,7 +330,7 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
 
 #### BEGIN CDCL TESTING ####
 def test_1() -> None:
-    f = cnf((1, 2), (-2, 3), (-3, 4), (-4, 5), (6, 7))
+    f = read_dimacs(Path("./tests/custom/test_1.cnf"))
     m = Model.from_lits(-1)
     m = unit_propagation(f, m, fuel=1)
     assert m.weak_eq(Model.from_lits(-1, 2)), f"{m}"
@@ -323,7 +345,7 @@ def test_1() -> None:
 
 
 def test_2() -> None:
-    f = cnf((1, 2), (-2, 3), (-3, 1))
+    f = read_dimacs(Path("./tests/custom/test_2.cnf"))
     m = Model.from_lits(-1)
     m = unit_propagation(f, m)
     conflict_recovery = analyze_conflict((Lit(-2), Lit(3)), m)
@@ -333,9 +355,7 @@ def test_2() -> None:
 
 
 def test_3() -> None:
-    f = cnf(
-        (-1, 2), (-1, 3, 5), (-2, 4), (-3, -4), (1, 5, -2), (2, 3), (2, -3, 7), (6, -5)
-    )
+    f = read_dimacs(Path("./tests/custom/test_3.cnf"))
     m = Model.from_lits(1, -6, -7)
     m = unit_propagation(f, m)
     conflict = find_conflict(f, m)
@@ -434,7 +454,7 @@ def test_with_timeout(timeout: float = 5.0) -> None:
 def main() -> None:
     import sys
 
-    if 1 < len(sys.argv):
+    if len(sys.argv) > 1:
         test = Path(sys.argv[1])
         model = cdcl(read_dimacs(test))
         print(model)
