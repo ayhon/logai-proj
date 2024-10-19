@@ -237,16 +237,19 @@ def unit_propagation(
         for lit in clause:
             if model(lit) is None and clause not in watch[lit]:
                 return Lit(lit)
+        return None
     clauses = watch[entry_point].copy()
     for clause in clauses:
         u = unit(clause)
         if u is None:
             lit = choose_watched(m, watch, clause)
+            if lit is None:
+                continue
             watch[lit] |= {clause}
             watch[entry_point] -= {clause}
         else:
-            m.propagate([(u, clause - {u})])
-            unit_propagation(f, m, watch, -u, fuel)
+            m = m.propagate([(u, clause - {u})])
+            m = unit_propagation(f, m, watch, -u, fuel)
     return m
 
 
@@ -309,29 +312,37 @@ def nb_vars(f: Cnf) -> int:
 
 
 def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
+    def watch_clause(watch, clause):
+        l1, l2, *_ = clause
+        watch[l1] |= {clause}
+        watch[l2] |= {clause}
     m = Model()
     # Marks "watched" literals to implement their indexing
     watch: dict[Lit, set[Clause]] = defaultdict(set)
+    to_propagate = []
     for clause in f:
         try:
-            l1, l2, *_ = clause
-            watch[l1] |= {clause}
-            watch[l2] |= {clause}
+            watch_clause(watch, clause)
         except ValueError:  # There is only one literal in clause
             lit, *_ = clause
-            m.propagate([(lit, clause-{lit})])
-            m = unit_propagation(f, m, watch, -lit, fuel=fuel)
+            to_propagate.append((lit, clause-{lit}))
+        m = m.propagate(to_propagate)
+        for u, _ in to_propagate:
+            m = unit_propagation(f, m, watch, -u, fuel=fuel)
 
     for _ in range(fuel):
         while conflict := find_conflict(f, m):
             if VERBOSE:
                 print(f"Found conflict {show_clause(conflict)}")
             conflict_recovery = analyze_conflict(conflict, m)
+            # print(conflict_recovery)
             if not conflict_recovery:
                 return None
             kept_literals, learned_clause = conflict_recovery
             if VERBOSE:
                 print(f"Learned {show_clause(learned_clause)}")
+            if learned_clause in f:
+                return None
             f = Cnf(f | {Clause(learned_clause)})
             m.backtrack(kept_literals)
 
@@ -340,7 +351,7 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
             if VERBOSE:
                 print(f"Decided {lit}")
             m.decide(lit)
-            m = unit_propagation(f, m, watch, -lit, fuel=fuel)
+            m = unit_propagation(f, m, watch, neg(lit), fuel=fuel)
         else:
             return m
     raise TimeoutError("Couldn't find satisfiable formula with"
