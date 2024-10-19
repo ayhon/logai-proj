@@ -214,6 +214,10 @@ def unit_propagation(
     fuel: int = DEFAULT_RECURSION_FUEL
 ) -> Model:
     def unit(clause: Clause) -> Lit | None:
+        """
+        Returns the unassigned literal if the clause is a unit.
+        If it's not, returns None.
+        """
         has_unassigned = False
         res = None
         for lit in clause:
@@ -239,7 +243,7 @@ def unit_propagation(
         if u is None:
             lit = choose_watched(m, watch, clause)
             watch[lit] |= {clause}
-            watch[u] -= {clause}
+            watch[entry_point] -= {clause}
         else:
             m.propagate([(u, clause - {u})])
             unit_propagation(f, m, watch, -u, fuel)
