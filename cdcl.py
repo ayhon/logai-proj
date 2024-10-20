@@ -11,9 +11,12 @@ from typing import (
 from collections import defaultdict
 from pathlib import Path
 from multiprocessing import Process
+from time import sleep
+from random import choice
+
 
 DEFAULT_RECURSION_FUEL = 1_000_000
-VERBOSE = False
+VERBOSE = True
 
 #### BEGIN BASIC DEFINITIONS ####
 Lit = NewType("Lit", int)
@@ -207,7 +210,6 @@ def fixpoint(
 
 
 def unit_propagation(
-    f: Cnf,
     m: Model,
     watch: dict[Lit, set[Clause]],
     entry_point: Lit,
@@ -238,30 +240,38 @@ def unit_propagation(
             if model(lit) is None and clause not in watch[lit]:
                 return Lit(lit)
         return None
-    clauses = watch[entry_point].copy()
-    for clause in clauses:
+    assert m(entry_point) is False, "Entry point must be  false"
+    to_swap = []
+    to_propagate = []
+    for clause in watch[entry_point]:
         u = unit(clause)
         if u is None:
             lit = choose_watched(m, watch, clause)
             if lit is None:
                 continue
-            watch[lit] |= {clause}
-            watch[entry_point] -= {clause}
+            to_swap.append((lit, clause))
         else:
-            m = m.propagate([(u, clause - {u})])
-            m = unit_propagation(f, m, watch, -u, fuel)
+            to_propagate.append((u, clause-{u}))
+    for lit, clause in to_swap:
+        watch[lit].add(clause)
+        watch[entry_point].remove(clause)
+    for u, deps in to_propagate:
+        if m(u) is not None:
+            continue
+        if VERBOSE:
+            print(f"Propagated {u}({deps})")
+        m.propagate([(u, deps)])
+        unit_propagation(m, watch, neg(u), fuel)
     return m
 
 
 def analyze_conflict(
-    conflict: Iterable[Lit], m: Model
+    conflict: Iterable[Lit],
+    m: Model
 ) -> tuple[int, frozenset[Lit]] | None:
     to_process = [l for l in conflict]
     decided_literals: list[Lit] = []
     while to_process:
-        # if len(to_process) == 1:
-        #     # We could stop the search here and learn this clause.
-        #     return frozenset(decided_literals + to_process)
         processing = to_process
         to_process = []
         while processing:
@@ -272,7 +282,7 @@ def analyze_conflict(
             else:
                 to_process.extend(deps)
     if decided_literals:
-        new_size = max(p for lit in decided_literals
+        new_size = min(p for lit in decided_literals
                        if (p := m.pos(lit)) is not None)
         return new_size, frozenset(decided_literals)
     # If there are no decided literals, it means we have reached a
@@ -296,15 +306,12 @@ def find_conflict(f: Cnf, m: Model) -> Clause | None:
 
 
 def find_undecided_literal(f: Cnf, m: Model) -> Lit | None:
-    return next(
-        (
-            lit
-            for clause in f
-            if not any(m(l) is True for l in clause)
-            and (lit := next((l for l in clause if m(l) is None), None))
-        ),
-        None
-    )
+    try:
+        lit = choice([lit for clause in f
+                      for lit in clause if m(lit) is None])
+        return -lit
+    except IndexError:
+        return None
 
 
 def nb_vars(f: Cnf) -> int:
@@ -314,46 +321,67 @@ def nb_vars(f: Cnf) -> int:
 def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
     def watch_clause(watch, clause):
         l1, l2, *_ = clause
-        watch[l1] |= {clause}
-        watch[l2] |= {clause}
+        assert (m(l1) is None) and (m(l2) is None)
+        watch[l1].add(clause)
+        watch[l2].add(clause)
+
+    def propagate_units(m: Model, units, watch):
+        for u in units:
+            assert m(u) is not False
+            if m(u) is True:
+                continue
+            if VERBOSE:
+                print(f"Found {u} (unit)")
+            m.propagate([(u, frozenset())])
+            unit_propagation(m, watch, neg(u), fuel=fuel)
+
     m = Model()
     # Marks "watched" literals to implement their indexing
-    watch: dict[Lit, set[Clause]] = defaultdict(set)
-    to_propagate = []
+    watch: dict[Lit, set[Clause]] = {}
+    for clause in f:
+        for lit in clause:
+            watch[lit] = set()
+            watch[-lit] = set()
+
+    units = []
     for clause in f:
         try:
             watch_clause(watch, clause)
         except ValueError:  # There is only one literal in clause
-            lit, *_ = clause
-            to_propagate.append((lit, clause-{lit}))
-        m = m.propagate(to_propagate)
-        for u, _ in to_propagate:
-            m = unit_propagation(f, m, watch, -u, fuel=fuel)
+            u, *_ = clause
+            units.append(u)
+    propagate_units(m, units, watch)
 
     for _ in range(fuel):
         while conflict := find_conflict(f, m):
             if VERBOSE:
-                print(f"Found conflict {show_clause(conflict)}")
+                sleep(.5)
+            if VERBOSE:
+                print(f"Found conflict {conflict}")
             conflict_recovery = analyze_conflict(conflict, m)
-            # print(conflict_recovery)
             if not conflict_recovery:
                 return None
             kept_literals, learned_clause = conflict_recovery
             if VERBOSE:
-                print(f"Learned {show_clause(learned_clause)}")
-            if learned_clause in f:
-                return None
+                print(f"Learned {learned_clause}")
             f = Cnf(f | {Clause(learned_clause)})
             m.backtrack(kept_literals)
+            try:
+                watch_clause(watch, learned_clause)
+            except ValueError:
+                u, *_ = learned_clause
+                units.append(u)
+                propagate_units(m, units, watch)
 
         lit = find_undecided_literal(f, m)
         if lit is not None:
             if VERBOSE:
                 print(f"Decided {lit}")
             m.decide(lit)
-            m = unit_propagation(f, m, watch, neg(lit), fuel=fuel)
+            m = unit_propagation(m, watch, neg(lit), fuel=fuel)
         else:
             return m
+        # print(len(m))
     raise TimeoutError("Couldn't find satisfiable formula with"
                        f"{fuel} iterations")
 
