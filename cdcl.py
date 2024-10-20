@@ -206,62 +206,73 @@ def fixpoint(
     raise TimeoutError(f"Couldn't find fix point in {fuel} iterations")
 
 
+def choose_watched(model, watch, clause) -> Lit | None:
+    """
+    Chooses a new literal to watch. We want it to be unassigned,
+    and it must not already be watched.
+    """
+    for lit in clause:
+        if model(lit) is None and clause not in watch[lit]:
+            return Lit(lit)
+    return None
+
+
 def unit_propagation(
     m: Model,
     watch: dict[Lit, set[Clause]],
-    entry_point: Lit,
-    fuel: int = DEFAULT_RECURSION_FUEL
-) -> Model:
+    entry_point: Lit
+):
+    """
+    Finds all conclusions from a model given a formula encoded as a watch
+    data structure.
+    @pre for each clause c in the formula, there are precisely two literals l
+    such that c is in watch[l]. Those literals are unassigned in m except
+    entry_point which is false.
+    @post All consequences from the current argument given the formula encoded
+    in watch are found.
+    """
     def unit(clause: Clause) -> Lit | None:
         """
         Returns the unassigned literal if the clause is a unit.
         If it's not, returns None.
         """
-        has_unassigned = False
-        res = None
+        unassigned_literal = None
         for lit in clause:
-            if m(lit) is False:
-                continue
-            if m(lit) is True:
+            if m(lit) is True:  # If there's a true literal, it is not a unit
                 return None
-            if has_unassigned:  # Second unsassigned
+            if m(lit) is None and unassigned_literal is None:
+                # First unassigned literal, we keep it in memory
+                unassigned_literal = lit
+            elif m(lit) is None:
+                # This is the second unassigned literal, not a unit clause
                 return None
-            has_unassigned = True
-            res = lit
-        return res
+        return unassigned_literal
 
-    def choose_watched(model, watch, clause) -> Lit:
-        """
-        Chooses a new literal to watch. We want it to be unassigned,
-        and it must not already be watched.
-        """
-        for lit in clause:
-            if model(lit) is None and clause not in watch[lit]:
-                return Lit(lit)
-        return None
-    assert m(entry_point) is False, "Entry point must be  false"
     to_swap = []
     to_propagate = []
     for clause in watch[entry_point]:
         u = unit(clause)
-        if u is None:
+        if u is None:  # The clause is not a unit
             lit = choose_watched(m, watch, clause)
-            if lit is None:
+            if lit is None:  # We reached a contradiction
                 continue
+            # If possible, we watch another literal because we don't want to
+            # watch false literals when others are unassigned.
             to_swap.append((lit, clause))
-        else:
+        else:  # The clause is a unit and u is unassigned
             to_propagate.append((u, clause-{u}))
-    for lit, clause in to_swap:
+
+    for lit, clause in to_swap:  # Literals from non-unit clauses
         watch[lit].add(clause)
         watch[entry_point].remove(clause)
-    for u, deps in to_propagate:
+
+    for u, deps in to_propagate:  # Literals from unit clauses
         if m(u) is not None:
             continue
         if VERBOSE:
             print(f"Propagated {u}({deps})")
         m.propagate([(u, deps)])
-        unit_propagation(m, watch, neg(u), fuel)
-    return m
+        unit_propagation(m, watch, neg(u))
 
 
 def analyze_conflict(
@@ -317,31 +328,43 @@ def nb_vars(f: Cnf) -> int:
     return len({abs(l) for clause in f for l in clause})
 
 
+def watch_clause(watch, clause):
+    """
+    Selects to literals in clause and watch them.
+    """
+    l1, l2, *_ = clause
+    watch[l1].add(clause)
+    watch[l2].add(clause)
+
+
+def propagate_units(m: Model, units, watch):
+    """
+    Set every literal u in units to true and propagate. No literal can be false
+    """
+    for u in units:
+        if m(u) is True:
+            continue
+        if VERBOSE:
+            print(f"Found {u} (unit)")
+        m.propagate([(u, frozenset())])
+        unit_propagation(m, watch, neg(u))
+
+
 def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
-    def watch_clause(watch, clause):
-        l1, l2, *_ = clause
-        assert (m(l1) is None) and (m(l2) is None)
-        watch[l1].add(clause)
-        watch[l2].add(clause)
-
-    def propagate_units(m: Model, units, watch):
-        for u in units:
-            assert m(u) is not False
-            if m(u) is True:
-                continue
-            if VERBOSE:
-                print(f"Found {u} (unit)")
-            m.propagate([(u, frozenset())])
-            unit_propagation(m, watch, neg(u), fuel=fuel)
-
+    """
+    Returns a model satisfying f is f is SAT and None otherwise.
+    fuel gives a threshold on the maximum number of iterations of CDCL.
+    """
     m = Model()
-    # Marks "watched" literals to implement their indexing
+    # Marks "watched" literals to implement indexing
     watch: dict[Lit, set[Clause]] = {}
     for clause in f:
         for lit in clause:
             watch[lit] = set()
             watch[-lit] = set()
 
+    # We can't index clauses with only one literal and deal with them
+    # separately.
     units = []
     for clause in f:
         try:
@@ -352,35 +375,32 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
     propagate_units(m, units, watch)
 
     for _ in range(fuel):
-        while conflict := find_conflict(f, m):
-            if VERBOSE:
-                sleep(.5)
-            if VERBOSE:
-                print(f"Found conflict {conflict}")
+        while conflict := find_conflict(f, m):  # Backtracking
             conflict_recovery = analyze_conflict(conflict, m)
             if not conflict_recovery:
                 return None
             kept_literals, learned_clause = conflict_recovery
-            if VERBOSE:
-                print(f"Learned {learned_clause}")
-            f = Cnf(f | {Clause(learned_clause)})
+            f |= frozenset({learned_clause})  # Add the clause to f
             m.backtrack(kept_literals)
-            try:
+            try:  # Take care of watching the new clause.
                 watch_clause(watch, learned_clause)
             except ValueError:
                 u, *_ = learned_clause
+                propagate_units(m, [u], watch)
                 units.append(u)
-                propagate_units(m, units, watch)
 
-        lit = find_undecided_literal(f, m)
-        if lit is not None:
             if VERBOSE:
-                print(f"Decided {lit}")
-            m.decide(lit)
-            m = unit_propagation(m, watch, neg(lit), fuel=fuel)
-        else:
+                print(f"Found conflict {conflict}")
+                print(f"Learned {learned_clause}")
+
+        # Take any literal, set it to True, propagate.
+        lit = find_undecided_literal(f, m)
+        if lit is None:  # We decided every literal! Yeepi
             return m
-        # print(len(m))
+        if VERBOSE:
+            print(f"Decided {lit}")
+        m.decide(lit)
+        unit_propagation(m, watch, neg(lit))
     raise TimeoutError("Couldn't find satisfiable formula with"
                        f"{fuel} iterations")
 
