@@ -1,3 +1,5 @@
+"""Module providing an implementation of CDCL"""
+
 from typing import (
     NewType,
     Generator,
@@ -8,10 +10,8 @@ from typing import (
     Sequence,
     Self,
 )
-from collections import defaultdict
 from pathlib import Path
 from multiprocessing import Process
-from time import sleep
 from random import choice
 
 
@@ -215,14 +215,15 @@ def choose_watched(model, watch, clause) -> Lit | None:
     and it must not already be watched.
     """
     for lit in clause:
-        if model(lit) is None and clause not in watch[lit]:
-            return Lit(lit)
+        if model(lit) is not False and clause not in watch[lit]:
+            return lit
     return None
 
 
 def unit_propagation(
     m: Model,
     watch: dict[Lit, set[Clause]],
+    clause_watched,
     entry_point: Lit
 ):
     """
@@ -256,18 +257,20 @@ def unit_propagation(
     for clause in watch[entry_point]:
         u = unit(clause)
         if u is None:  # The clause is not a unit
-            lit = choose_watched(m, watch, clause)
-            if lit is None:  # We reached a contradiction
-                continue
             # If possible, we watch another literal because we don't want to
             # watch false literals when others are unassigned.
-            to_swap.append((lit, clause))
+            to_swap.append(clause)
         else:  # The clause is a unit and u is unassigned
             to_propagate.append((u, clause-{u}))
 
-    for lit, clause in to_swap:  # Literals from non-unit clauses
-        watch[lit].add(clause)
+    for clause in to_swap:  # Literals from non-unit clauses
+        lit = choose_watched(m, watch, clause)
+        if lit is None:  # We reached a contradiction
+            continue
         watch[entry_point].remove(clause)
+        clause_watched[clause].remove(entry_point)
+        watch[lit].add(clause)
+        clause_watched[clause].add(lit)
 
     for u, deps in to_propagate:  # Literals from unit clauses
         if m(u) is not None:
@@ -275,7 +278,7 @@ def unit_propagation(
         if VERBOSE:
             print(f"Propagated {u}({deps})")
         m.propagate([(u, deps)])
-        unit_propagation(m, watch, neg(u))
+        unit_propagation(m, watch, clause_watched, neg(u))
 
 
 def analyze_conflict(
@@ -311,36 +314,45 @@ def decide(m: Model, f: Cnf) -> Model:
     return m.decide(lit)
 
 
-def find_conflict(f: Cnf, m: Model) -> Clause | None:
-    return next(
-        (clause for clause in f if all(m(l) is False for l in clause)),
-        None
-    )
+def find_conflict(f: Cnf, m: Model, clause_watched) -> Clause | None:
+    for clause in clause_watched:
+        l1, l2 = clause_watched[clause]
+        if m(l1) is False and m(l2) is False:
+            return clause
+    return None
 
 
-def find_undecided_literal(f: Cnf, m: Model) -> Lit | None:
-    try:
-        lit = choice([lit for clause in f
-                      for lit in clause if m(lit) is None])
-        return -lit
-    except IndexError:
+def find_undecided_literal(literals: list[Lit], m: Model, watch) -> Lit | None:
+    best = []
+    best_length = float('-inf')
+    for lit in literals:
+        if m(lit) is not None:
+            continue
+        if len(watch[lit]) > best_length:
+            best_length = len(watch[lit])
+            best = [lit]
+        elif len(watch[lit]) == best_length:
+            best.append(lit)
+    if not best:
         return None
+    return -choice(best)
 
 
 def nb_vars(f: Cnf) -> int:
     return len({abs(l) for clause in f for l in clause})
 
 
-def watch_clause(watch, clause):
+def watch_clause(watch, clause_watched, clause):
     """
     Selects to literals in clause and watch them.
     """
     l1, l2, *_ = clause
     watch[l1].add(clause)
     watch[l2].add(clause)
+    clause_watched[clause] = {l1, l2}
 
 
-def propagate_units(m: Model, units, watch):
+def propagate_units(m: Model, units, watch, clause_watched):
     """
     Set every literal u in units to true and propagate. No literal can be false
     """
@@ -350,7 +362,7 @@ def propagate_units(m: Model, units, watch):
         if VERBOSE:
             print(f"Found {u} (unit)")
         m.propagate([(u, frozenset())])
-        unit_propagation(m, watch, neg(u))
+        unit_propagation(m, watch, clause_watched, neg(u))
 
 
 def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
@@ -358,9 +370,11 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
     Returns a model satisfying f is f is SAT and None otherwise.
     fuel gives a threshold on the maximum number of iterations of CDCL.
     """
+    literals = [lit for clause in f for lit in clause]
     m = Model()
     # Marks "watched" literals to implement indexing
     watch: dict[Lit, set[Clause]] = {}
+    clause_watched: dict[Clause, set[Lit, Lit]] = {}
     for clause in f:
         for lit in clause:
             watch[lit] = set()
@@ -371,14 +385,14 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
     units = []
     for clause in f:
         try:
-            watch_clause(watch, clause)
+            watch_clause(watch, clause_watched, clause)
         except ValueError:  # There is only one literal in clause
             u, *_ = clause
             units.append(u)
-    propagate_units(m, units, watch)
+    propagate_units(m, units, watch, clause_watched)
 
     for _ in range(fuel):
-        while conflict := find_conflict(f, m):  # Backtracking
+        while conflict := find_conflict(f, m, clause_watched):  # Backtracking
             conflict_recovery = analyze_conflict(conflict, m)
             if not conflict_recovery:
                 return None
@@ -386,10 +400,10 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
             f |= frozenset({learned_clause})  # Add the clause to f
             m.backtrack(kept_literals)
             try:  # Take care of watching the new clause.
-                watch_clause(watch, learned_clause)
+                watch_clause(watch, clause_watched, learned_clause)
             except ValueError:
                 u, *_ = learned_clause
-                propagate_units(m, [u], watch)
+                propagate_units(m, [u], watch, clause_watched)
                 units.append(u)
 
             if VERBOSE:
@@ -397,13 +411,13 @@ def cdcl(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
                 print(f"Learned {learned_clause}")
 
         # Take any literal, set it to True, propagate.
-        lit = find_undecided_literal(f, m)
+        lit = find_undecided_literal(literals, m, watch)
         if lit is None:  # We decided every literal! Yeepi
             return m
         if VERBOSE:
             print(f"Decided {lit}")
         m.decide(lit)
-        unit_propagation(m, watch, neg(lit))
+        unit_propagation(m, watch, clause_watched, neg(lit))
     raise TimeoutError("Couldn't find satisfiable formula with"
                        f"{fuel} iterations")
 
@@ -543,18 +557,8 @@ def main() -> None:
         print(model)
         return
 
-    # unit_propagation
-    #print("test_1")
-    #test_1()
-
-    # analyze_conflict
-    #print("test_2")
-    #test_2()
-    #print("test_3")
-    #test_3()
-
     # Exhaustive
-    test_with_timeout(timeout=30.0)
+    test_with_timeout(timeout=120.)
 
 
 if __name__ == "__main__":
