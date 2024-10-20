@@ -16,7 +16,7 @@ from random import choice
 
 
 DEFAULT_RECURSION_FUEL = 1_000_000
-VERBOSE = True
+VERBOSE = False
 
 #### BEGIN BASIC DEFINITIONS ####
 Lit = NewType("Lit", int)
@@ -223,8 +223,10 @@ def unit_propagation(
         has_unassigned = False
         res = None
         for lit in clause:
-            if m(lit) is not None:
+            if m(lit) is False:
                 continue
+            if m(lit) is True:
+                return None
             if has_unassigned:  # Second unsassigned
                 return None
             has_unassigned = True
