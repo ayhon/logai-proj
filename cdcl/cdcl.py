@@ -43,8 +43,8 @@ def show_clause(clause: Clause) -> str:
     return "∨".join(map(str, clause))
 
 
-def show_cnf(cnf: Cnf) -> str:
-    return "∧".join("(" + show_clause(clause) + ")" for clause in cnf)
+def show_cnf(f: Cnf) -> str:
+    return "∧".join("(" + show_clause(clause) + ")" for clause in f)
 
 
 class Model:
@@ -231,7 +231,7 @@ class Model:
         """Give the clause which characterizes the state."""
         return Clause(frozenset(it.lit for it in self._data))
 
-    def entails(self, f: set[frozenset[Lit]]) -> bool | None:
+    def entails(self, f: Cnf) -> bool | None:
         for clause in f:
             clause_entailed = False
             for lit in clause:
@@ -246,16 +246,15 @@ class Model:
 
     def __str__(self) -> str:
         num_var = max(abs(lit) for lit, _ in self._data)
-        res = f"{num_var}\n"
+        var_list = []
         for var in range(1, num_var+1):
-            res += " "
             if self(var) is False:
-                res += "0"
+                var_list.append("0")
             elif self(var) is True:
-                res += "1"
+                var_list.append("1")
             else:
-                res += "?"
-        return res
+                var_list.append("?")
+        return f"{num_var}\n" + " ".join(var_list)
 
     #### END MODEL API ####
 
@@ -451,26 +450,66 @@ def find_conflict(m: Model, watch_list: TwoWatchList) -> Clause | None:
 
 def find_undecided_literal(
     literals: list[Lit],
-    m: Model, watch_list
+    m: Model, watch_list,
+    heuristic: str = "DLIS"
 ) -> Lit | None:
     """
     Chooses a unassigned literal under partial model m according to some
     heuristic. If all literals are assigned, return None.
     """
-    best = []
-    best_length = float('-inf')
-    for lit in literals:
-        if m(lit) is not None:
-            continue
-        watched_clauses = len(watch_list.get_clauses(lit))
-        if watched_clauses > best_length:
-            best_length = watched_clauses
-            best = [lit]
-        elif watched_clauses == best_length:
-            best.append(lit)
-    if not best:
-        return None
-    return -random.choice(best)
+    def get_undecided(index=0):
+        if index >= len(literals):
+            return
+        if m(literals[index]) is None:
+            yield literals[index]
+        yield from get_undecided(index+1)
+
+    def DLIS(undecided: Iterable[Lit]) -> Lit:
+        """
+        Implements Dynamic Largest Individual Sum variant for 2WL.
+        We just take one of the literals with the most watched clauses.
+        """
+        best = []
+        best_length = float('-inf')
+        for lit in undecided:
+            num_clauses = len(watch_list.get_clauses(lit))
+            if num_clauses > best_length:
+                best_length = num_clauses
+                best = [lit]
+            elif num_clauses == best_length:
+                best.append(lit)
+        if not best:
+            return None
+        return random.choice(best)
+
+    def jeroslow_wang(undecided: Iterable[Lit]) -> Lit:
+        """
+        Implements Jeroslow-Wang heuristic variant for 2WL. We exponentially
+        favors literals in shorter clauses.
+        """
+        best = []
+        best_length = float('-inf')
+        for lit in undecided:
+            weight = 0
+            for clause in watch_list.get_clauses(lit):
+                clause_size = len(clause)
+                weight += 2**(-clause_size)
+            if weight > best_length:
+                best_length = weight
+                best = [lit]
+            elif weight == best_length:
+                best.append(lit)
+        if not best:
+            return None
+        return random.choice(best)
+    undecided = get_undecided()
+    match heuristic:
+        case "DLIS":
+            return DLIS(undecided)
+        case "JW":
+            return jeroslow_wang(undecided)
+        case _:
+            raise ValueError("Invalid Heuristic")
 
 
 def watch_clause(watch, clause_watched, clause):

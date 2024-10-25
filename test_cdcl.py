@@ -36,15 +36,22 @@ def paths_by_size() -> Iterable[tuple[Path, bool]]:
     )
 
 
-def run_test(p: Path, success: bool) -> bool | None:
+def run_test(p: Path, satisfiable: bool) -> bool | None:
+    """
+    Tests whether CDCL works correctly on the instance located at path p.
+
+    Return None if CDCL times out, True if it founds a model of f (or founds
+    that f is unsat), False if the result is incorrect.
+    """
+    f = read_dimacs(p)
     try:
-        model = get_model(read_dimacs(p))
+        model = get_model(f)
     except TimeoutError:
         return None
 
-    if success:
-        return model is not None
-    return model is None
+    if not satisfiable:
+        return model is None
+    return model.entails(f)
 
 
 def main():
