@@ -510,16 +510,6 @@ def find_undecided_literal(
             raise ValueError("Invalid Heuristic")
 
 
-def watch_clause(watch, clause_watched, clause):
-    """
-    Selects to literals in clause and watch them.
-    """
-    l1, l2, *_ = clause
-    watch[l1].add(clause)
-    watch[l2].add(clause)
-    clause_watched[clause] = {l1, l2}
-
-
 def propagate_units(
     m: Model, units: Iterable[Lit], watch_list: TwoWatchList
 ) -> None:
