@@ -20,7 +20,7 @@ VERBOSE = False
 #### BEGIN BASIC DEFINITIONS ####
 Lit = NewType("Lit", int)
 Clause = NewType("Clause", frozenset[Lit])
-Cnf = NewType("Cnf", frozenset[Clause])
+Cnf = NewType("Cnf", set[Clause])
 
 
 def neg(lit: Lit) -> Lit:
@@ -34,7 +34,7 @@ def neg(lit: Lit) -> Lit:
 
 def cnf(*clauses: Iterable[int]) -> Cnf:
     return Cnf(
-        frozenset(Clause(frozenset(Lit(lit) for lit in clause))
+        set(Clause(frozenset(Lit(lit) for lit in clause))
                   for clause in clauses)
     )
 
@@ -137,16 +137,14 @@ class Model:
             lits_str = f.readline().split()
             data = []
             for i, lit_str in enumerate(lits_str):
-                lit: Lit
                 match lit_str:
                     case "1":
-                        lit = i
+                        data.append(cls.Item(Lit(i), None))
                     case "0":
-                        lit = -i
+                        data.append(cls.Item(Lit(-i), None))
                     case "?":
                         continue
-                data.append(cls.Item(lit, None))
-            data = list(map(int, lits_str))
+            # data = list(map(int, lits_str))
             return cls(data)
 
     def __init__(self, data: list[Item] | None = None) -> None:
@@ -195,8 +193,10 @@ class Model:
         Precondtions:
             - q is assigned in the model.
         """
-        _, dependencies = self._items_cache.get(q, None)
-        return dependencies
+        entry = self._items_cache.get(q, None)
+        if entry is not None:
+            return entry[1]
+        return None
 
     def decide(self, lit: Lit) -> "Model":
         """Adds a new literal assignment, without dependencies."""
@@ -251,9 +251,9 @@ class Model:
         num_var = max(abs(lit) for lit, _ in self._data)
         var_list = []
         for var in range(1, num_var+1):
-            if self(var) is False:
+            if self(Lit(var)) is False:
                 var_list.append("0")
-            elif self(var) is True:
+            elif self(Lit(var)) is True:
                 var_list.append("1")
             else:
                 var_list.append("?")
@@ -281,14 +281,14 @@ class TwoWatchList:
     for clause in watch_list:
         ...
     """
-    def __init__(self, literals: list[Lit] | None):
-        self.lit_to_clauses: dict[Lit, set[frozenset[Lit]]] = {}
-        self.clause_to_lits: dict[frozenset[Lit], set[Lit]] = {}
+    def __init__(self, literals: list[Lit]) -> None:
+        self.lit_to_clauses: dict[Lit, set[Clause]] = {}
+        self.clause_to_lits: dict[Clause, set[Lit]] = {}
         for lit in literals:
             self.lit_to_clauses[lit] = set()
             self.lit_to_clauses[neg(lit)] = set()
 
-    def watch_clause(self, clause):
+    def watch_clause(self, clause: Clause) -> None:
         """
         Indexes two literals in a clause.
         """
@@ -300,7 +300,7 @@ class TwoWatchList:
         self.lit_to_clauses[l2].add(clause)
         self.clause_to_lits[clause] = {l1, l2}
 
-    def change_watched(self, clause, old_lit, new_lit):
+    def change_watched(self, clause: Clause, old_lit: Lit, new_lit: Lit) -> None:
         """
         Removes clause from the indexing of old_lit that got assigned false to
         add it to new_lit.
@@ -310,20 +310,20 @@ class TwoWatchList:
         self.lit_to_clauses[new_lit].add(clause)
         self.clause_to_lits[clause].add(new_lit)
 
-    def get_clauses(self, lit: Lit) -> set[frozenset[Lit]]:
+    def get_clauses(self, lit: Lit) -> set[Clause]:
         """
         Returns a set of all clauses which are watched using lit.
         """
         return self.lit_to_clauses[lit]
 
-    def get_lits(self, clause) -> set[Lit]:
+    def get_lits(self, clause: Clause) -> set[Lit]:
         """
         Returns a set containing the two literals watched in clause.
         """
         return self.clause_to_lits[clause]
 
-    def __iter__(self):
-        return iter(self.clause_to_lits.keys())
+    def __iter__(self) -> Generator[Clause, None, None]:
+        yield from iter(self.clause_to_lits.keys())
 
 
 #### END BASIC DEFINITIONS ####
@@ -346,7 +346,9 @@ def fixpoint(
     raise TimeoutError(f"Couldn't find fix point in {fuel} iterations")
 
 
-def choose_watched(model, watch_list, clause) -> Lit | None:
+def choose_watched(
+    model: Model, watch_list: TwoWatchList, clause: Clause
+) -> Lit | None:
     """
     Chooses a new literal to watch. We want it to be unassigned,
     and it must not already be watched.
@@ -418,7 +420,7 @@ def unit_propagation(
 def analyze_conflict(
     conflict: Iterable[Lit],
     m: Model
-) -> tuple[int, frozenset[Lit]] | None:
+) -> tuple[int, Clause] | None:
     to_process = list(conflict)
     decided_literals: list[Lit] = []
     while to_process:
@@ -434,7 +436,7 @@ def analyze_conflict(
     if decided_literals:
         new_size = min(p for lit in decided_literals
                        if (p := m.pos(lit)) is not None)
-        return new_size, frozenset(decided_literals)
+        return new_size, Clause(frozenset(decided_literals))
     # If there are no decided literals, it means we have reached a
     # contradiction
 
@@ -453,7 +455,8 @@ def find_conflict(m: Model, watch_list: TwoWatchList) -> Clause | None:
 
 def find_undecided_literal(
     literals: list[Lit],
-    m: Model, watch_list,
+    m: Model,
+    watch_list: TwoWatchList,
     heuristic: str = "DLIS"
 ) -> Lit | None:
     """
@@ -467,7 +470,7 @@ def find_undecided_literal(
             yield literals[index]
         yield from get_undecided(index+1)
 
-    def DLIS(undecided: Iterable[Lit]) -> Lit:
+    def DLIS(undecided: Iterable[Lit]) -> Lit | None:
         """
         Implements Dynamic Largest Individual Sum variant for 2WL.
         We just take one of the literals with the most watched clauses.
@@ -485,7 +488,7 @@ def find_undecided_literal(
             return None
         return random.choice(best)
 
-    def jeroslow_wang(undecided: Iterable[Lit]) -> Lit:
+    def jeroslow_wang(undecided: Iterable[Lit]) -> Lit | None:
         """
         Implements Jeroslow-Wang heuristic variant for 2WL. We exponentially
         favors literals in shorter clauses.
@@ -525,7 +528,9 @@ def watch_clause(watch, clause_watched, clause):
     clause_watched[clause] = {l1, l2}
 
 
-def propagate_units(m: Model, units, watch_list):
+def propagate_units(
+    m: Model, units: Iterable[Lit], watch_list: TwoWatchList
+) -> None:
     """
     Set every literal u in units to true and propagate. No literal can be false
     """
@@ -563,7 +568,7 @@ def get_model(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
             if not conflict_recovery:
                 return None
             kept_literals, learned_clause = conflict_recovery
-            f |= frozenset({learned_clause})  # Add the clause to f
+            f.add(learned_clause)  # Add the clause to f
             m.backtrack(kept_literals)
             try:  # Take care of watching the new clause.
                 watch_list.watch_clause(learned_clause)
