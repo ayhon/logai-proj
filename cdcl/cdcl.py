@@ -460,12 +460,6 @@ def find_undecided_literal(
     Chooses a unassigned literal under partial model m according to some
     heuristic. If all literals are assigned, return None.
     """
-    def get_undecided(index=0):
-        if index >= len(literals):
-            return
-        if m(literals[index]) is None:
-            yield literals[index]
-        yield from get_undecided(index+1)
 
     def DLIS(undecided: Iterable[Lit]) -> Lit | None:
         """
@@ -505,7 +499,8 @@ def find_undecided_literal(
         if not best:
             return None
         return random.choice(best)
-    undecided = get_undecided()
+
+    undecided = [lit for lit in literals if m(lit) is None]
     match heuristic:
         case "DLIS":
             return DLIS(undecided)
