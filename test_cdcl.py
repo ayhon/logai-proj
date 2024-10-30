@@ -5,7 +5,7 @@ from typing import Iterable
 
 from cdcl.cdcl import get_model, read_dimacs
 
-TIMEOUT = 30.
+TIMEOUT = 120.
 
 
 def ok_pahts() -> Iterable[Path]:

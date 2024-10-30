@@ -16,6 +16,7 @@ import random
 
 DEFAULT_RECURSION_FUEL = 1_000_000
 VERBOSE = False
+strat = 4
 
 #### BEGIN BASIC DEFINITIONS ####
 Lit = NewType("Lit", int)
@@ -175,10 +176,8 @@ class Model:
         Return the truth value of q under the partial assignment, or None if q
         is not assigned.
         """
-        entry = self._items_cache.get(q, None)
-        if entry is not None:
-            return entry[0]
-        return None
+        truth_value, _ = self._items_cache.get(q, (None, None))
+        return truth_value
 
     def pos(self, q: Lit) -> int:
         return self._pos_cache.get(q, None) or self._pos_cache[neg(q)]
@@ -209,7 +208,17 @@ class Model:
         Adds a new literal assignment, with some dependencies on why this
         literal was chosen.
         """
-        propagated = [Model.Item(lit=lit, deps=deps) for lit, deps in items]
+        propagated = []
+        for lit, deps in items:
+            to_add = set()
+            for parent in deps:
+                p_deps = self.deps(parent)
+                if p_deps is None:
+                    to_add.add(parent)
+                else:
+                    to_add |= p_deps
+            propagated.append(Model.Item(lit=lit, deps=to_add))
+        # propagated = [Model.Item(lit=lit, deps=deps) for lit, deps in items]
         self._extend(propagated)
         return self
 
@@ -360,8 +369,9 @@ def choose_watched(
 def unit_propagation(
     m: Model,
     watch_list: TwoWatchList,
-    entry_point: Lit
-):
+    entry_point: Lit,
+    conflicts=None
+) -> set[Clause]:
     """
     Finds all conclusions from a model given a formula encoded as a watch
     data structure.
@@ -388,6 +398,8 @@ def unit_propagation(
                 return None
         return unassigned_literal
 
+    if conflicts is None:
+        conflicts = set()
     to_swap = []
     to_propagate = []
     for clause in watch_list.get_clauses(entry_point):
@@ -402,16 +414,17 @@ def unit_propagation(
     for clause in to_swap:  # Literals from non-unit clauses
         lit = choose_watched(m, watch_list, clause)
         if lit is None:  # We reached a contradiction
-            continue
-        watch_list.change_watched(clause, entry_point, lit)
+            conflicts.add(clause)
+        else:
+            watch_list.change_watched(clause, entry_point, lit)
 
     for u, deps in to_propagate:  # Literals from unit clauses
-        if m(u) is not None:
-            continue
+        if m(u) is None:
+            m.propagate([(u, deps)])
         if VERBOSE:
             print(f"Propagated {u}({deps})")
-        m.propagate([(u, deps)])
-        unit_propagation(m, watch_list, neg(u))
+        unit_propagation(m, watch_list, neg(u), conflicts)
+    return conflicts
 
 
 def analyze_conflict(
@@ -438,16 +451,23 @@ def analyze_conflict(
     # contradiction
 
 
-def find_conflict(m: Model, watch_list: TwoWatchList) -> Clause | None:
+def find_conflict(
+    m: Model,
+    watch_list: TwoWatchList,
+    clauses: Cnf,
+    literals: list[Lit]
+) -> Clause | None:
     """
     Efficiently identify a clause whose literals are all false by testing only
     two literals in it.
     """
-    for clause in watch_list:
-        l1, l2 = watch_list.get_lits(clause)
-        if m(l1) is False and m(l2) is False:
-            return clause
-    return None
+    for lit in watch_list.lit_to_clauses.keys():
+        if m(lit) is False:
+            continue
+        clauses -= watch_list.lit_to_clauses[lit]
+    if not clauses:
+        return None
+    return clauses.pop()
 
 
 def find_undecided_literal(
@@ -461,14 +481,16 @@ def find_undecided_literal(
     heuristic. If all literals are assigned, return None.
     """
 
-    def DLIS(undecided: Iterable[Lit]) -> Lit | None:
+    def DLIS() -> Lit | None:
         """
         Implements Dynamic Largest Individual Sum variant for 2WL.
         We just take one of the literals with the most watched clauses.
         """
         best = []
         best_length = float('-inf')
-        for lit in undecided:
+        for lit in literals:
+            if m(lit) is not None:
+                continue
             num_clauses = len(watch_list.get_clauses(lit))
             if num_clauses > best_length:
                 best_length = num_clauses
@@ -479,14 +501,16 @@ def find_undecided_literal(
             return None
         return random.choice(best)
 
-    def jeroslow_wang(undecided: Iterable[Lit]) -> Lit | None:
+    def jeroslow_wang() -> Lit | None:
         """
         Implements Jeroslow-Wang heuristic variant for 2WL. We exponentially
         favors literals in shorter clauses.
         """
         best = []
         best_length = float('-inf')
-        for lit in undecided:
+        for lit in literals:
+            if m(lit) is not None:
+                continue
             weight = 0
             for clause in watch_list.get_clauses(lit):
                 clause_size = len(clause)
@@ -500,12 +524,11 @@ def find_undecided_literal(
             return None
         return random.choice(best)
 
-    undecided = [lit for lit in literals if m(lit) is None]
     match heuristic:
         case "DLIS":
-            return DLIS(undecided)
+            return DLIS()
         case "JW":
-            return jeroslow_wang(undecided)
+            return jeroslow_wang()
         case _:
             raise ValueError("Invalid Heuristic")
 
@@ -516,13 +539,15 @@ def propagate_units(
     """
     Set every literal u in units to true and propagate. No literal can be false
     """
+    conflicts = set()
     for u in units:
         if m(u) is True:
             continue
         if VERBOSE:
             print(f"Found {u} (unit)")
         m.propagate([(u, frozenset())])
-        unit_propagation(m, watch_list, neg(u))
+        conflicts |= unit_propagation(m, watch_list, neg(u))
+    return conflicts
 
 
 def get_model(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
@@ -542,21 +567,23 @@ def get_model(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
             u, *_ = clause
             units.append(u)
 
-    propagate_units(m, units, watch_list)
+    conflicts_space = propagate_units(m, units, watch_list)
 
     for _ in range(fuel):
-        while conflict := find_conflict(m, watch_list):  # Backtracking
+        # Backtracking
+        while conflict := find_conflict(m, watch_list, conflicts_space, literals):
             conflict_recovery = analyze_conflict(conflict, m)
             if not conflict_recovery:
                 return None
             kept_literals, learned_clause = conflict_recovery
-            f.add(learned_clause)  # Add the clause to f
+            if len(learned_clause) > 1:
+                f.add(learned_clause)  # Add the clause to f
             m.backtrack(kept_literals)
             try:  # Take care of watching the new clause.
                 watch_list.watch_clause(learned_clause)
             except ValueError:
                 u, *_ = learned_clause
-                propagate_units(m, [u], watch_list)
+                conflicts_space |= propagate_units(m, [u], watch_list)
 
             if VERBOSE:
                 print(f"Found conflict {conflict}")
@@ -569,7 +596,7 @@ def get_model(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
         if VERBOSE:
             print(f"Decided {lit}")
         m.decide(lit)
-        unit_propagation(m, watch_list, neg(lit))
+        conflicts_space = unit_propagation(m, watch_list, neg(lit))
     raise TimeoutError("Couldn't find satisfiable formula with"
                        f"{fuel} iterations")
 
