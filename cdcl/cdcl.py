@@ -16,7 +16,6 @@ import random
 
 DEFAULT_RECURSION_FUEL = 1_000_000
 VERBOSE = False
-strat = 4
 
 #### BEGIN BASIC DEFINITIONS ####
 Lit = NewType("Lit", int)
@@ -147,6 +146,7 @@ class Model:
             return cls(data)
 
     def __init__(self, data: list[Item] | None = None) -> None:
+        self.undecided = set()
         self._data = []
         self._items_cache = {}
         self._pos_cache = {}
@@ -197,6 +197,8 @@ class Model:
 
     def decide(self, lit: Lit) -> "Model":
         """Adds a new literal assignment, without dependencies."""
+        self.remove_undecided(lit)
+        self.remove_undecided(neg(lit))
         it = Model.Item(lit=lit, deps=None)
         return self._extend([it])
 
@@ -210,6 +212,8 @@ class Model:
         """
         propagated = []
         for lit, deps in items:
+            self.remove_undecided(lit)
+            self.remove_undecided(neg(lit))
             to_add = set()
             for parent in deps:
                 p_deps = self.deps(parent)
@@ -225,6 +229,7 @@ class Model:
     def backtrack(self, size: int) -> "Model":
         """Backtracks until the given choice"""
         assert size >= 0, "Cannot resize to negative value"
+        self.add_undecided([lit for lit, _ in self._data[size:]])
         self._data = self._data[:size]
         self._rebuild_pos_cache()
         self._rebuild_items_cache()
@@ -252,6 +257,14 @@ class Model:
             if not clause_entailed:
                 return False
         return True
+
+    def add_undecided(self, undecided: list[Lit]):
+        for lit in undecided:
+            self.undecided.add(lit)
+            self.undecided.add(neg(lit))
+
+    def remove_undecided(self, undecided: Lit):
+        self.undecided.remove(undecided)
 
     def __str__(self) -> str:
         num_var = max(abs(lit) for lit, _ in self._data)
@@ -328,6 +341,12 @@ class TwoWatchList:
         """
         return self.clause_to_lits[clause]
 
+    def clauses(self) -> set[Clause]:
+        return set(self.clause_to_lits.keys())
+
+    def literals(self) -> set[Lit]:
+        return set(self.lit_to_clauses.keys())
+
     def __iter__(self) -> Generator[Clause, None, None]:
         yield from iter(self.clause_to_lits.keys())
 
@@ -381,49 +400,50 @@ def unit_propagation(
     @post All consequences from the current argument given the formula encoded
     in watch are found.
     """
-    def unit(clause: Clause) -> Lit | None:
+    def find_unwatched(clause: Clause) -> tuple[Lit | None, bool | None]:
         """
-        Returns the unassigned literal if the clause is a unit.
-        If it's not, returns None.
+        Returns a non-False literal if it exists and information about the
+        clause. The second value is None if a True literal is in the  clause.
+        Otherwise, it returns True if exactly one literal is None and False
+        otherwise.
+        If there are many literals assigned to None, it is guarenteed that if
+        one is returned, it is not watched.
         """
-        unassigned_literal = None
+        l1, l2 = watch_list.get_lits(clause)
+        if m(l1) is True:
+            return l1, None
+        if m(l2) is True:
+            return l2, None
+        unassigned_lit: Lit | None = None
+        watched_lits = watch_list.get_lits(clause)
+        alone = True
         for lit in clause:
-            if m(lit) is True:  # If there's a true literal, it is not a unit
-                return None
-            if m(lit) is None and unassigned_literal is None:
-                # First unassigned literal, we keep it in memory
-                unassigned_literal = lit
-            elif m(lit) is None:
-                # This is the second unassigned literal, not a unit clause
-                return None
-        return unassigned_literal
+            if m(lit) is True:
+                return lit, None
+            if m(lit) is None:
+                if unassigned_lit is not None:
+                    alone = False
+                    if lit not in watched_lits:
+                        unassigned_lit = lit
+                else:
+                    unassigned_lit = lit
+        return unassigned_lit, alone
 
     if conflicts is None:
         conflicts = set()
-    to_swap = []
-    to_propagate = []
-    for clause in watch_list.get_clauses(entry_point):
-        u = unit(clause)
-        if u is None:  # The clause is not a unit
-            # If possible, we watch another literal because we don't want to
-            # watch false literals when others are unassigned.
-            to_swap.append(clause)
-        else:  # The clause is a unit and u is unassigned
-            to_propagate.append((u, clause-{u}))
 
-    for clause in to_swap:  # Literals from non-unit clauses
-        lit = choose_watched(m, watch_list, clause)
-        if lit is None:  # We reached a contradiction
+    for clause in watch_list.get_clauses(entry_point).copy():
+        lit, alone = find_unwatched(clause)
+        if lit is None:
             conflicts.add(clause)
         else:
-            watch_list.change_watched(clause, entry_point, lit)
+            if lit not in watch_list.get_lits(clause):
+                watch_list.change_watched(clause, entry_point, lit)
+            if alone is True:
+                deps = clause - {lit}
+                m.propagate([(lit, deps)])
+                unit_propagation(m, watch_list, neg(lit), conflicts)
 
-    for u, deps in to_propagate:  # Literals from unit clauses
-        if m(u) is None:
-            m.propagate([(u, deps)])
-        if VERBOSE:
-            print(f"Propagated {u}({deps})")
-        unit_propagation(m, watch_list, neg(u), conflicts)
     return conflicts
 
 
@@ -488,9 +508,7 @@ def find_undecided_literal(
         """
         best = []
         best_length = float('-inf')
-        for lit in literals:
-            if m(lit) is not None:
-                continue
+        for lit in m.undecided:
             num_clauses = len(watch_list.get_clauses(lit))
             if num_clauses > best_length:
                 best_length = num_clauses
@@ -558,6 +576,7 @@ def get_model(f: Cnf, fuel: int = DEFAULT_RECURSION_FUEL) -> Model | None:
     m = Model()
 
     literals = [lit for clause in f for lit in clause]
+    m.add_undecided(literals)
     watch_list = TwoWatchList(literals)
     units = []
     for clause in f:
