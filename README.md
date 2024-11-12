@@ -1,3 +1,23 @@
+# About this project
+
+This project was made by Nathan Houyet and Fernando for the ENS-Saclay course "Logical Aspects of AI: Solvers" by M. Sighireanu. A complete description of the problem can be found below. It relies on the module Typer to provide a user-friendly interface.
+
+# How to use this module?
+
+CDCL module can be called using the following commands:
+
+```sh
+python -m cdcl --help
+python -m cdcl sat formula.cnf -o model.mdl  # Saves the model in a file
+python -m cdcl check model.mdl -f formula.cnf  # Checks if the model entails the formula
+```
+
+Automatic testing is possible using `test_cdcl.py`:
+
+```sh
+python test_cdcl.py
+```
+
 # Implementing CDCL
 
 The goal of this lab (and mini-project) is to code some simple CDCL solver and, if possible, some of its improvements. You are free to use any programming language. You could work with at most one partner. The due date is 2023-10-27 at 1pm.

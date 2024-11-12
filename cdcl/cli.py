@@ -62,6 +62,8 @@ def check(
     )]
 ):
     "Check that a model entails a formula."
+    if formula is None:
+        raise ValueError("You must specify a formula")
     f = cdcl.read_dimacs(Path(formula))
     for model_path in models:
         model = cdcl.Model.from_file(Path(model_path))

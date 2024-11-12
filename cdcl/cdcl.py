@@ -139,12 +139,37 @@ class Model:
                 self.unassigned_lits.add(neg(child))
                 self.assigned_lits.remove(child)
 
+    @classmethod
+    def from_file(cls, path: Path) -> Self:
+        with path.open("r") as f:
+            n = int(f.readline())
+            m = Model(range(1, n+1))
+            lits_str = f.readline().split()
+            for i, lit_str in enumerate(lits_str):
+                match lit_str:
+                    case "1":
+                        m.decide(Lit(i+1))
+                    case "0":
+                        m.decide(neg(Lit(i+1)))
+                    case "?":
+                        continue
+            return m
+
     def __call__(self, lit: Lit):
         if lit in self.assigned_lits:
             return True
         if neg(lit) in self.assigned_lits:
             return False
         return None
+
+    def __str__(self):
+        literals = ({abs(lit) for lit in self.assigned_lits}
+                    | {abs(lit) for lit in self.unassigned_lits})
+        n = max(literals)
+        return f"{n}\n" + " ".join(
+                ("1" if lit in self.assigned_lits else "0")
+                for lit in range(1, n+1)
+            )
 
 
 class TwoWatchList:
