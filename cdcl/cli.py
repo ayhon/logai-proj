@@ -36,11 +36,6 @@ def sat(
     )] = False
 ):
     "Find a satisfying model for a CNF formula, if one exists."
-    if len(output_files) == 1:
-        output_files *= len(formula_files)
-    for ff, of in zip_longest(formula_files, output_files):
-        source_file = Path(ff)
-        formula = cdcl.read_dimacs(source_file)
         model = cdcl.get_model(formula, fuel=fuel)
         if of is not None:
             output_file = Path(of)
