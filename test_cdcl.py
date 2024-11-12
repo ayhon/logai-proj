@@ -5,7 +5,7 @@ from typing import Iterable
 
 from cdcl.cdcl import get_model, read_dimacs
 
-TIMEOUT = 120.
+TIMEOUT = 60.
 
 
 def ok_pahts() -> Iterable[Path]:
@@ -51,6 +51,8 @@ def run_test(p: Path, satisfiable: bool) -> bool | None:
 
     if not satisfiable:
         return model is None
+    if model is None:
+        return False
     return model.entails(f)
 
 
